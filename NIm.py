@@ -8,6 +8,8 @@ import json
 import zipfile
 import io
 from copy import deepcopy
+import math
+import time
 
 # ============================================================================
 # Page Config
@@ -24,16 +26,16 @@ st.markdown("""
 Watch two Reinforcement Learning agents master the ancient strategy game of **Nim** through intelligent learning.
 
 **🎯 Nim Rules:**
-- Start with 3 piles of matchsticks (default: 3, 5, 7)
+- Start with 4 piles of matchsticks (default: 1, 3, 5, 7)
 - Players alternate turns
 - On each turn, remove ANY number of sticks from ONE pile
 - **Goal:** Force your opponent to take the last stick (last to take LOSES!)
 
 **Core Algorithmic Components:**
 - 🎓 **Q-Learning** - Value-based reinforcement learning
-- 🧮 **Optimal Strategy Discovery** - Learning winning positions
-- 📊 **Experience Replay** - Enhanced learning from past games
-- 🎯 **Strategic Planning** - Minimax-inspired evaluation
+- 🌳 **Monte Carlo Tree Search (MCTS)** - Strategic simulation
+- 🎯 **Minimax with Alpha-Beta** - Game tree search
+- 📊 **Experience Replay** - Enhanced learning
 """)
 
 # ============================================================================
@@ -41,7 +43,7 @@ Watch two Reinforcement Learning agents master the ancient strategy game of **Ni
 # ============================================================================
 
 class Nim:
-    def __init__(self, piles=[3, 5, 7]):
+    def __init__(self, piles=[1, 3, 5, 7]):
         self.initial_piles = piles[:]
         self.reset()
     
@@ -101,18 +103,45 @@ class Nim:
         return new_env
 
 # ============================================================================
-# RL Agent
+# MCTS Node
+# ============================================================================
+
+class MCTSNode:
+    def __init__(self, state, parent=None, action=None):
+        self.state = state
+        self.parent = parent
+        self.action = action
+        self.children = []
+        self.visits = 0
+        self.value = 0.0
+        self.untried_actions = None
+    
+    def uct_value(self, exploration=1.41):
+        if self.visits == 0:
+            return float('inf')
+        return self.value / self.visits + exploration * math.sqrt(math.log(self.parent.visits) / self.visits)
+    
+    def best_child(self, exploration=1.41):
+        return max(self.children, key=lambda c: c.uct_value(exploration))
+    
+    def most_visited_child(self):
+        return max(self.children, key=lambda c: c.visits)
+
+# ============================================================================
+# RL Agent with MCTS and Minimax
 # ============================================================================
 
 class NimAgent:
     def __init__(self, player_id, lr=0.1, gamma=0.95, epsilon=1.0,
-                 epsilon_decay=0.995, epsilon_min=0.01):
+                 epsilon_decay=0.995, epsilon_min=0.01, mcts_sims=50, minimax_depth=3):
         self.player_id = player_id
         self.lr = lr
         self.gamma = gamma
         self.epsilon = epsilon
         self.epsilon_decay = epsilon_decay
         self.epsilon_min = epsilon_min
+        self.mcts_simulations = mcts_sims
+        self.minimax_depth = minimax_depth
         
         self.q_table = {}
         
@@ -132,22 +161,143 @@ class NimAgent:
         if not available_actions:
             return None
         
-        # Epsilon-greedy
+        # Level 1: Epsilon-greedy exploration during training
         if training and random.random() < self.epsilon:
             return random.choice(available_actions)
         
-        # Choose best action
-        state = env.get_state()
+        # Level 2: Combined strategy - Q-values, MCTS, and Minimax
+        best_action = None
         best_score = -float('inf')
-        best_action = available_actions[0]
         
         for action in available_actions:
-            q_value = self.get_q_value(state, action)
-            if q_value > best_score:
-                best_score = q_value
+            score = 0.0
+            
+            # Q-Learning component
+            q_value = self.get_q_value(env.get_state(), action)
+            score += q_value * 0.3
+            
+            # MCTS component
+            if self.mcts_simulations > 0:
+                mcts_score = self._evaluate_action_mcts(env, action)
+                score += mcts_score * 0.4
+            
+            # Minimax component
+            if self.minimax_depth > 0:
+                minimax_score = self._evaluate_action_minimax(env, action)
+                score += minimax_score * 0.3
+            
+            if score > best_score:
+                best_score = score
                 best_action = action
         
-        return best_action
+        return best_action if best_action else available_actions[0]
+    
+    def _evaluate_action_mcts(self, env, action):
+        """Use MCTS to evaluate an action"""
+        sim_env = env.copy()
+        sim_env.make_move(action)
+        
+        if sim_env.game_over:
+            return 100 if sim_env.winner == self.player_id else -100
+        
+        root = MCTSNode(sim_env.get_state())
+        root.untried_actions = sim_env.get_available_actions()[:]
+        
+        for _ in range(self.mcts_simulations):
+            node = root
+            temp_env = sim_env.copy()
+            
+            # Selection
+            while node.untried_actions == [] and node.children:
+                node = node.best_child()
+                if node.action:
+                    temp_env.make_move(node.action)
+            
+            # Expansion
+            if node.untried_actions and not temp_env.game_over:
+                next_action = random.choice(node.untried_actions)
+                node.untried_actions.remove(next_action)
+                temp_env.make_move(next_action)
+                child = MCTSNode(temp_env.get_state(), parent=node, action=next_action)
+                node.children.append(child)
+                node = child
+            
+            # Simulation
+            reward = self._simulate_playout(temp_env)
+            
+            # Backpropagation
+            while node:
+                node.visits += 1
+                node.value += reward
+                node = node.parent
+        
+        return root.value / max(root.visits, 1)
+    
+    def _evaluate_action_minimax(self, env, action):
+        """Use minimax to evaluate an action"""
+        sim_env = env.copy()
+        sim_env.make_move(action)
+        
+        if sim_env.game_over:
+            return 100 if sim_env.winner == self.player_id else -100
+        
+        return self._minimax(sim_env, self.minimax_depth - 1, -float('inf'), float('inf'), False)
+    
+    def _minimax(self, env, depth, alpha, beta, is_maximizing):
+        """Minimax with alpha-beta pruning"""
+        if env.game_over:
+            if env.winner == self.player_id:
+                return 100
+            else:
+                return -100
+        
+        if depth == 0:
+            return 0
+        
+        actions = env.get_available_actions()
+        if not actions:
+            return 0
+        
+        if is_maximizing:
+            max_eval = -float('inf')
+            for action in actions[:10]:  # Limit branching
+                sim_env = env.copy()
+                sim_env.make_move(action)
+                eval_score = self._minimax(sim_env, depth - 1, alpha, beta, False)
+                max_eval = max(max_eval, eval_score)
+                alpha = max(alpha, eval_score)
+                if beta <= alpha:
+                    break
+            return max_eval
+        else:
+            min_eval = float('inf')
+            for action in actions[:10]:  # Limit branching
+                sim_env = env.copy()
+                sim_env.make_move(action)
+                eval_score = self._minimax(sim_env, depth - 1, alpha, beta, True)
+                min_eval = min(min_eval, eval_score)
+                beta = min(beta, eval_score)
+                if beta <= alpha:
+                    break
+            return min_eval
+    
+    def _simulate_playout(self, env):
+        """Random playout for MCTS"""
+        sim_env = env.copy()
+        steps = 0
+        max_steps = 30
+        
+        while not sim_env.game_over and steps < max_steps:
+            actions = sim_env.get_available_actions()
+            if not actions:
+                break
+            action = random.choice(actions)
+            sim_env.make_move(action)
+            steps += 1
+        
+        if sim_env.game_over:
+            return 50 if sim_env.winner == self.player_id else -50
+        return 0
     
     def update_q_value(self, state, action, reward, next_state, next_actions):
         action_key = str(action)
@@ -203,31 +353,12 @@ def play_game(env, agent1, agent2, training=True):
         move_count += 1
         
         if done:
-            # Update opponent's last move with win reward
             if env.winner is not None:
                 winner = agents[env.winner]
                 loser = agents[1 - env.winner]
                 
                 winner.wins += 1
                 loser.losses += 1
-                
-                # Reward winner's last move
-                if env.move_history and training:
-                    last_player, last_action = env.move_history[-1]
-                    if last_player == env.winner:
-                        # This shouldn't happen (winner didn't take last stick)
-                        pass
-                    else:
-                        # Reward the move that forced opponent to lose
-                        winner_prev_move = None
-                        for i in range(len(env.move_history) - 2, -1, -1):
-                            if env.move_history[i][0] == env.winner:
-                                winner_prev_move = env.move_history[i]
-                                break
-                        
-                        if winner_prev_move:
-                            # Simplified: just reinforce winning pattern
-                            pass
             
             for agent in agents:
                 agent.games_played += 1
@@ -240,7 +371,7 @@ def play_game(env, agent1, agent2, training=True):
 
 def visualize_piles(env, title="Nim Game State"):
     """Create matplotlib figure of matchstick piles"""
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(12, 5))
     
     max_pile = max(env.piles) if env.piles else 1
     
@@ -324,7 +455,9 @@ def create_agents_zip(agent1, agent2, config):
         "wins": int(agent1.wins),
         "losses": int(agent1.losses),
         "total_score": int(agent1.total_score),
-        "games_played": int(agent1.games_played)
+        "games_played": int(agent1.games_played),
+        "mcts_simulations": int(agent1.mcts_simulations),
+        "minimax_depth": int(agent1.minimax_depth)
     }
     
     agent2_data = {
@@ -333,7 +466,9 @@ def create_agents_zip(agent1, agent2, config):
         "wins": int(agent2.wins),
         "losses": int(agent2.losses),
         "total_score": int(agent2.total_score),
-        "games_played": int(agent2.games_played)
+        "games_played": int(agent2.games_played),
+        "mcts_simulations": int(agent2.mcts_simulations),
+        "minimax_depth": int(agent2.minimax_depth)
     }
     
     buffer = io.BytesIO()
@@ -352,7 +487,9 @@ def load_agents_from_zip(uploaded_file):
             agent2_state = json.loads(zf.read("agent2.json"))
             config = json.loads(zf.read("config.json"))
             
-            agent1 = NimAgent(0, config.get('lr1', 0.1), config.get('gamma1', 0.95))
+            agent1 = NimAgent(0, config.get('lr1', 0.1), config.get('gamma1', 0.95),
+                            mcts_sims=agent1_state.get('mcts_simulations', 50),
+                            minimax_depth=agent1_state.get('minimax_depth', 3))
             agent1.q_table = deserialize_q_table(agent1_state['q_table'])
             agent1.epsilon = agent1_state.get('epsilon', 0.0)
             agent1.wins = agent1_state.get('wins', 0)
@@ -360,7 +497,9 @@ def load_agents_from_zip(uploaded_file):
             agent1.total_score = agent1_state.get('total_score', 0)
             agent1.games_played = agent1_state.get('games_played', 0)
             
-            agent2 = NimAgent(1, config.get('lr2', 0.1), config.get('gamma2', 0.95))
+            agent2 = NimAgent(1, config.get('lr2', 0.1), config.get('gamma2', 0.95),
+                            mcts_sims=agent2_state.get('mcts_simulations', 50),
+                            minimax_depth=agent2_state.get('minimax_depth', 3))
             agent2.q_table = deserialize_q_table(agent2_state['q_table'])
             agent2.epsilon = agent2_state.get('epsilon', 0.0)
             agent2.wins = agent2_state.get('wins', 0)
@@ -381,19 +520,24 @@ st.sidebar.header("⚙️ Controls")
 
 # Game Setup
 with st.sidebar.expander("🎮 Game Setup", expanded=True):
-    pile1 = st.number_input("Pile 1", 1, 20, 3, 1)
-    pile2 = st.number_input("Pile 2", 1, 20, 5, 1)
-    pile3 = st.number_input("Pile 3", 1, 20, 7, 1)
+    pile1 = st.number_input("Pile 1", 1, 20, 1, 1)
+    pile2 = st.number_input("Pile 2", 1, 20, 3, 1)
+    pile3 = st.number_input("Pile 3", 1, 20, 5, 1)
+    pile4 = st.number_input("Pile 4", 1, 20, 7, 1)
 
 with st.sidebar.expander("1. Agent 1 Parameters", expanded=True):
     lr1 = st.slider("Learning Rate α₁", 0.01, 0.5, 0.1, 0.01)
     gamma1 = st.slider("Discount Factor γ₁", 0.8, 0.99, 0.95, 0.01)
     epsilon_decay1 = st.slider("Epsilon Decay₁", 0.99, 0.9999, 0.995, 0.0001, format="%.4f")
+    mcts_sims1 = st.slider("MCTS Simulations₁", 0, 200, 50, 10)
+    minimax_depth1 = st.slider("Minimax Depth₁", 0, 10, 3, 1)
 
 with st.sidebar.expander("2. Agent 2 Parameters", expanded=True):
     lr2 = st.slider("Learning Rate α₂", 0.01, 0.5, 0.1, 0.01)
     gamma2 = st.slider("Discount Factor γ₂", 0.8, 0.99, 0.95, 0.01)
     epsilon_decay2 = st.slider("Epsilon Decay₂", 0.99, 0.9999, 0.995, 0.0001, format="%.4f")
+    mcts_sims2 = st.slider("MCTS Simulations₂", 0, 200, 50, 10)
+    minimax_depth2 = st.slider("Minimax Depth₂", 0, 10, 3, 1)
 
 with st.sidebar.expander("3. Training Configuration", expanded=True):
     episodes = st.number_input("Training Episodes", 10, 10000, 500, 10)
@@ -410,7 +554,7 @@ with st.sidebar.expander("4. Brain Storage 💾", expanded=False):
                 "lr1": lr1, "gamma1": gamma1, "epsilon_decay1": epsilon_decay1,
                 "lr2": lr2, "gamma2": gamma2, "epsilon_decay2": epsilon_decay2,
                 "training_history": st.session_state.get('training_history', None),
-                "piles": [pile1, pile2, pile3]
+                "piles": [pile1, pile2, pile3, pile4]
             }
             
             zip_buffer = create_agents_zip(st.session_state.agent1, st.session_state.agent2, config)
@@ -442,7 +586,6 @@ with st.sidebar.expander("4. Brain Storage 💾", expanded=False):
                         st.session_state.training_history = cfg["training_history"]
                     
                     st.toast("Brains Restored Successfully!", icon="♾️")
-                    import time
                     time.sleep(1)
                     st.rerun()
 
@@ -460,15 +603,23 @@ if st.sidebar.button("🧹 Clear All & Reset", use_container_width=True):
 # ============================================================================
 
 if 'env' not in st.session_state:
-    st.session_state.env = Nim([pile1, pile2, pile3])
+    st.session_state.env = Nim([pile1, pile2, pile3, pile4])
 
 if 'agent1' not in st.session_state:
-    st.session_state.agent1 = NimAgent(0, lr1, gamma1, epsilon_decay=epsilon_decay1)
-    st.session_state.agent2 = NimAgent(1, lr2, gamma2, epsilon_decay=epsilon_decay2)
+    st.session_state.agent1 = NimAgent(0, lr1, gamma1, epsilon_decay=epsilon_decay1, 
+                                      mcts_sims=mcts_sims1, minimax_depth=minimax_depth1)
+    st.session_state.agent2 = NimAgent(1, lr2, gamma2, epsilon_decay=epsilon_decay2,
+                                      mcts_sims=mcts_sims2, minimax_depth=minimax_depth2)
 
 agent1 = st.session_state.agent1
 agent2 = st.session_state.agent2
 env = st.session_state.env
+
+# Update parameters
+agent1.mcts_simulations = mcts_sims1
+agent1.minimax_depth = minimax_depth1
+agent2.mcts_simulations = mcts_sims2
+agent2.minimax_depth = minimax_depth2
 
 # ============================================================================
 # Display Stats
@@ -479,10 +630,12 @@ col1, col2, col3 = st.columns(3)
 with col1:
     st.metric("🔥 Agent 1", f"Q-States: {len(agent1.q_table)}", f"ε={agent1.epsilon:.4f}")
     st.metric("Wins", agent1.wins)
+    st.caption(f"MCTS: {agent1.mcts_simulations} | Minimax: {agent1.minimax_depth}")
 
 with col2:
     st.metric("🔥 Agent 2", f"Q-States: {len(agent2.q_table)}", f"ε={agent2.epsilon:.4f}")
     st.metric("Wins", agent2.wins)
+    st.caption(f"MCTS: {agent2.mcts_simulations} | Minimax: {agent2.minimax_depth}")
 
 with col3:
     total_games = agent1.games_played
@@ -556,7 +709,6 @@ if train_button:
     st.session_state.agent2 = agent2
     
     st.toast("Training Complete!", icon="🎉")
-    import time
     time.sleep(1)
     st.rerun()
 
@@ -586,6 +738,65 @@ if 'training_history' in st.session_state and st.session_state.training_history:
     st.line_chart(q_chart)
 
 # ============================================================================
+# AI vs AI Battle Arena
+# ============================================================================
+
+st.markdown("---")
+st.subheader("⚔️ AI vs AI Battle Arena")
+
+battle_col1, battle_col2 = st.columns(2)
+
+with battle_col1:
+    if st.button("🎮 Watch Agents Battle!", use_container_width=True, type="primary"):
+        st.session_state.battle_active = True
+        st.session_state.battle_env = Nim([pile1, pile2, pile3, pile4])
+        st.session_state.battle_move = 0
+        st.rerun()
+
+with battle_col2:
+    if st.button("⏹️ Stop Battle", use_container_width=True):
+        st.session_state.battle_active = False
+        st.rerun()
+
+if st.session_state.get('battle_active', False):
+    battle_env = st.session_state.battle_env
+    
+    if not battle_env.game_over:
+        # Display current state
+        current_player_name = f"Agent {battle_env.current_player + 1}"
+        fig = visualize_piles(battle_env, f"{current_player_name}'s Turn | Move {st.session_state.battle_move}")
+        st.pyplot(fig)
+        plt.close(fig)
+        
+        # Show scores
+        st.info(f"**Current Player:** {current_player_name}")
+        
+        # Make move automatically
+        time.sleep(2)
+        current_agent = agent1 if battle_env.current_player == 0 else agent2
+        action = current_agent.choose_action(battle_env, training=False)
+        
+        if action:
+            pile_idx, num_take = action
+            st.success(f"**{current_player_name}** removes **{num_take}** stick(s) from **Pile {pile_idx + 1}**")
+            battle_env.make_move(action)
+            st.session_state.battle_move += 1
+        
+        st.rerun()
+    else:
+        # Game over
+        fig = visualize_piles(battle_env, "Battle Complete!")
+        st.pyplot(fig)
+        plt.close(fig)
+        
+        if battle_env.winner == 0:
+            st.success("🏆 **Agent 1 Wins!**")
+        else:
+            st.error("🏆 **Agent 2 Wins!**")
+        
+        st.session_state.battle_active = False
+
+# ============================================================================
 # Human vs AI Mode
 # ============================================================================
 
@@ -600,13 +811,13 @@ col_h1, col_h2 = st.columns(2)
 
 with col_h1:
     if st.button("🎮 Start Game (You Go First)", use_container_width=True):
-        st.session_state.human_game = Nim([pile1, pile2, pile3])
+        st.session_state.human_game = Nim([pile1, pile2, pile3, pile4])
         st.session_state.human_is_player = 0
         st.rerun()
 
 with col_h2:
     if st.button("🤖 Start Game (AI Goes First)", use_container_width=True):
-        st.session_state.human_game = Nim([pile1, pile2, pile3])
+        st.session_state.human_game = Nim([pile1, pile2, pile3, pile4])
         st.session_state.human_is_player = 1
         # AI makes first move
         if agent1.q_table:
@@ -643,7 +854,6 @@ if st.session_state.human_game and not st.session_state.human_game.game_over:
                 
                 # AI's turn
                 if not game.game_over and agent1.q_table:
-                    import time
                     time.sleep(0.5)
                     action = agent1.choose_action(game, training=False)
                     if action:
@@ -652,7 +862,6 @@ if st.session_state.human_game and not st.session_state.human_game.game_over:
                 st.rerun()
     else:
         st.warning("🤖 AI is thinking...")
-        import time
         time.sleep(1)
         st.rerun()
 

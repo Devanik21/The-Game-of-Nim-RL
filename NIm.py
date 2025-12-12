@@ -548,7 +548,7 @@ with st.sidebar.expander("4. Brain Storage 💾", expanded=False):
         brain_size = len(st.session_state.agent1.q_table) + len(st.session_state.agent2.q_table)
         
         if brain_size > 0:
-            st.success(f"🧠 Brain Scan: {brain_size} memories found.")
+            st.success(f" Brain Scan: {brain_size} memories found.")
             
             config = {
                 "lr1": lr1, "gamma1": gamma1, "epsilon_decay1": epsilon_decay1,
@@ -589,7 +589,7 @@ with st.sidebar.expander("4. Brain Storage 💾", expanded=False):
                     time.sleep(1)
                     st.rerun()
 
-train_button = st.sidebar.button("🚀 Begin Training", use_container_width=True, type="primary")
+train_button = st.sidebar.button(" Begin Training", use_container_width=True, type="primary")
 
 if st.sidebar.button("🧹 Clear All & Reset", use_container_width=True):
     for key in list(st.session_state.keys()):
@@ -816,7 +816,7 @@ with col_h1:
         st.rerun()
 
 with col_h2:
-    if st.button("🤖 Start Game (AI Goes First)", use_container_width=True):
+    if st.button(" Start Game (AI Goes First)", use_container_width=True):
         st.session_state.human_game = Nim([pile1, pile2, pile3, pile4])
         st.session_state.human_is_player = 1
         # AI makes first move
@@ -861,7 +861,7 @@ if st.session_state.human_game and not st.session_state.human_game.game_over:
                 
                 st.rerun()
     else:
-        st.warning("🤖 AI is thinking...")
+        st.warning(" AI is thinking...")
         time.sleep(1)
         st.rerun()
 
@@ -875,7 +875,7 @@ elif st.session_state.human_game and st.session_state.human_game.game_over:
     if game.winner == st.session_state.human_is_player:
         st.success("🎉 Congratulations! You won!")
     else:
-        st.error("🤖 AI wins! Better luck next time!")
+        st.error(" AI wins! Better luck next time!")
     
     if st.button("🔄 Play Again", use_container_width=True):
         st.session_state.human_game = None

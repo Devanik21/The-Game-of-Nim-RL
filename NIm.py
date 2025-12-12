@@ -18,7 +18,7 @@ st.set_page_config(
     page_title="Strategic RL Nim",
     layout="wide",
     initial_sidebar_state="expanded",
-    page_icon="🔥"
+    page_icon=""
 )
 
 st.title("Strategic Nim RL Arena")
@@ -628,12 +628,12 @@ agent2.minimax_depth = minimax_depth2
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.metric("🔥 Agent 1", f"Q-States: {len(agent1.q_table)}", f"ε={agent1.epsilon:.4f}")
+    st.metric(" Agent 1", f"Q-States: {len(agent1.q_table)}", f"ε={agent1.epsilon:.4f}")
     st.metric("Wins", agent1.wins)
     st.caption(f"MCTS: {agent1.mcts_simulations} | Minimax: {agent1.minimax_depth}")
 
 with col2:
-    st.metric("🔥 Agent 2", f"Q-States: {len(agent2.q_table)}", f"ε={agent2.epsilon:.4f}")
+    st.metric(" Agent 2", f"Q-States: {len(agent2.q_table)}", f"ε={agent2.epsilon:.4f}")
     st.metric("Wins", agent2.wins)
     st.caption(f"MCTS: {agent2.mcts_simulations} | Minimax: {agent2.minimax_depth}")
 
@@ -885,4 +885,4 @@ elif st.session_state.human_game and st.session_state.human_game.game_over:
         st.rerun()
 
 st.markdown("---")
-st.caption("Strategic RL Nim Arena | Ancient Strategy Meets Modern AI 🔥")
+st.caption("Strategic RL Nim Arena | Ancient Strategy Meets Modern AI ")

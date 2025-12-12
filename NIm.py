@@ -18,7 +18,7 @@ st.set_page_config(
     page_title="Strategic RL Nim",
     layout="wide",
     initial_sidebar_state="expanded",
-    page_icon=""
+    page_icon="🤖"
 )
 
 st.title("Strategic Nim RL Arena")

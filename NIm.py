@@ -843,8 +843,11 @@ if st.session_state.human_game and not st.session_state.human_game.game_over:
                                       format_func=lambda x: f"Pile {x+1} ({game.piles[x]} sticks)")
         
         with hcol2:
-            max_take = game.piles[pile_choice] if pile_choice < len(game.piles) else 1
-            num_take = st.number_input("Remove How Many?", 1, max_take, 1)
+            # Get actual sticks, but ensure max is at least 1 to prevent UI crash
+            pile_sticks = game.piles[pile_choice] if pile_choice < len(game.piles) else 0
+            safe_max = max(1, pile_sticks)
+            
+            num_take = st.number_input("Remove How Many?", 1, safe_max, 1)
         
         with hcol3:
             st.write("")
